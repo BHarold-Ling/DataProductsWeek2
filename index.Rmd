@@ -1,0 +1,86 @@
+---
+title: "COVID-19 Growth"
+---
+
+## Submitted Date: 04/01/2020
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r warning=FALSE}
+suppressPackageStartupMessages(library(rgdal))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(leaflet))
+```
+
+```{r cache=TRUE}
+# Boundary data from https://github.com/datasets/geo-countries
+# downloaded 03/31/2020
+
+countries <- readOGR("../../data/countries.geojson", verbose = FALSE)
+codata <- countries@data
+```
+
+```{r cache=TRUE}
+
+# Downloaded COVID data 04/01/20, 8:30 AM EDT.
+
+# download.file("https://opendata.ecdc.europa.eu/covid19/casedistribution/csv", "data/casedistribution.csv", mode = "wb")
+
+cov <- read.csv("data/casedistribution.csv", stringsAsFactors = FALSE)
+# Fixes for known differences in codes
+cov$geoId[cov$geoId == "UK"] <- "GB"
+cov$geoId[cov$geoId == "EL"] <- "GR"
+names(cov)[1] <- "date"
+cov$date <- dmy(cov$date)
+```
+
+```{r}
+codata$ISO_A2 <- as.character(codata$ISO_A2)
+last.report <- max(cov$date)
+base.end <- last.report - 7
+base.start <- base.end - 13
+covuniq <- sort(unique(cov$geoId))
+cov.base <- sapply(covuniq, function(x) sum(filter(cov, between(date, base.start, base.end), geoId == x)$cases))
+cov.add <- sapply(covuniq, function(x) sum(filter(cov, date > base.end, geoId == x)$cases))
+cov.growth <- cov.add / (cov.base)
+cov.data <- data.frame(
+    ISO_A2 = covuniq,
+    base = as.vector(cov.base),
+    add = as.vector(cov.add),
+    growth = as.vector(cov.growth),
+    stringsAsFactors = FALSE
+)
+suppressMessages(codata <- codata %>% left_join(cov.data))
+codata$base[is.na(codata$base)] <- 0
+codata$add[is.na(codata$add)] <- 0
+codata$growth[is.na(codata$growth) | codata$growth == Inf] <- 0
+```
+
+```{r}
+bins <- unique(quantile(codata$growth, seq(0,1, by = 0.1)))
+palbin <- colorBin(
+    palette = "YlOrRd",
+    bins <- length(bins),
+    domain = bins
+)
+```
+
+## COVID-19 Growth Rate
+
+```{r}
+labels <- sprintf("<strong>%s</strong><br />New Case Rate: %g%%<br />Prev: %g / New: %g", codata$ADMIN, round(codata$growth * 100, 1), codata$base, codata$add) %>% lapply(htmltools::HTML)
+m4 <- leaflet(countries) %>% addPolygons(weight = 1, color = "black", fillColor = ~palbin(codata$growth), fillOpacity = 1, label = labels)
+m4
+```
+
+Growth is the ratio of cases reported in the last week divided by the total reported cases in the previous two weeks.  A steady state would have a rate of 50% by this calculation.  The two week window is used as a proxy for the number of active cases at the start of the last week.
+
+Map data is from Boundary data from Natural Earth via https://github.com/datasets/geo-countries.
+
+COVID-19 data is from European Centre for Disease Prevention and Control, https://www.ecdc.europa.eu/en/publications-data/download-todays-data-geographic-distribution-covid-19-cases-worldwide.
+
+NOTE: This is done with Leaflet, but does not use the standard Leaflet tileset.
+
